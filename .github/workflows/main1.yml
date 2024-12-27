@@ -1,0 +1,73 @@
+name: CI Build
+
+on:
+  workflow_dispatch:  # 允许手动触发工作流
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Toolchains
+        id: cache-toolchains
+        uses: actions/cache@v4
+        with:
+          key: cache-key-${{ hashFiles('configure.sh') }}
+          restore-keys: |
+            cache-key-${{ hashFiles('configure.sh') }}
+          path: |
+            ./toolchains
+
+      - name: Install Development Environment
+        run: |
+          brew install ninja meson
+
+      - name: Configuration
+        if: ${{ steps.cache-toolchains.outputs.cache-hit != 'true' }}
+        run: ./configure.sh
+
+      - name: Save Cache
+        id: cache-save
+        if: ${{ steps.cache-toolchains.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          key: cache-key-${{ hashFiles('configure.sh') }}
+          path: |
+            ./toolchains
+
+      - name: Build
+        run: |
+          meson setup --cross-file build-win64.txt --native-file build-osx.txt -Dlocal_native_llvm=true -Dbuild_airconv_for_windows=true build --buildtype debugoptimized
+          meson compile -C build
+
+      - name: Tar
+        run: tar -zcf artifacts.tar.gz build/src
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts
+          path: artifacts.tar.gz
+
+      - name: Build (release)
+        run: |
+          meson setup --cross-file build-win64.txt --native-file build-osx.txt -Dlocal_native_llvm=true build-release --buildtype release
+          meson compile -C build-release
+
+      - name: Tar (release)
+        run: tar -zcf artifacts-release.tar.gz build-release/src
+
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts-release.tar.gz
+          tag_name: latest-release  # 使用固定的标签名称
+          name: Latest Release
+          body: "This is an automatically generated release."
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          update: true  # 如果 Release 已存在，则更新它
